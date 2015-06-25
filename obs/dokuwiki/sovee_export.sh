@@ -10,7 +10,7 @@
 
 PROGNAME="${0##*/}"
 DOKU2HTML=/usr/local/sbin/doku2html
-PAGES=/var/www/vhosts/door43.org/httpdocs/data/gitrepo/pages
+PAGES=/var/www/projects/door43/data/gitrepo/pages/
 
 help() {
     echo
