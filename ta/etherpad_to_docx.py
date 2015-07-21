@@ -19,6 +19,7 @@ import re
 import shlex
 from subprocess import Popen, PIPE
 import sys
+import lxml.html
 import yaml
 
 LOGFILE = '/var/www/vhosts/door43.org/httpdocs/data/gitrepo/pages/playground/ta_export.log.txt'
@@ -494,8 +495,16 @@ def dokuwiki_to_markdown(dokuwiki):
 def html_to_docx(html):
 
     # html = html.replace('<a href="#', '<a href="')
-    # command = shlex.split('/usr/bin/pandoc --filter ./insert_pagebreaks_filter --toc --toc-depth=1 -f html -t docx -o "' + DOCXFILE + '"')
-    command = shlex.split('/usr/bin/pandoc --toc --toc-depth=1 -f html -t docx -o "' + DOCXFILE + '"')
+    # command = shlex.split('/usr/bin/pandoc --filter ./insert_pagebreaks_filter --toc --toc-depth=1
+    #  -f html -t docx -o "' + DOCXFILE + '"')
+
+    ref_docx = os.path.dirname(os.path.abspath(__file__)) + '/reference.docx'
+    cmd_text = '/usr/bin/pandoc --toc --toc-depth=1'
+    cmd_text += ' --reference-docx="' + ref_docx + '"'
+    cmd_text += ' -f html -t docx -o "' + DOCXFILE + '"'
+
+    command = shlex.split(cmd_text)
+
     com = Popen(command, shell=False, stdin=PIPE, stdout=PIPE, stderr=PIPE)
     out, err = com.communicate(html.encode('utf-8'))
 
@@ -529,9 +538,11 @@ def convert_png_link(match):
     try:
         parts = match.group(3).split('|')
         if isinstance(parts, list):
-            return match.group(1) + '![Image](https://door43.org/_media' + parts[0].replace(':', '/') + '.png)' + match.group(7)
+            return match.group(1) + '![Image](https://door43.org/_media' + parts[0].replace(':', '/') + '.png)' +\
+                match.group(7)
         else:
-            return match.group(1) + '![Image](https://door43.org/_media' + parts.replace(':', '/') + '.png)' + match.group(7)
+            return match.group(1) + '![Image](https://door43.org/_media' + parts.replace(':', '/') + '.png)' +\
+                match.group(7)
 
     except Exception as ex:
         log_error(str(ex))
@@ -662,6 +673,67 @@ def get_page_link_by_slug(pages, slug):
     return '<a href="#' + found[0].yaml_data['slug'].lower() + '">' + found[0].yaml_data['title'] + '</a>'
 
 
+def parse_ta_modules_html(html_source):
+
+    # try:
+    #     html = lxml.html.fromstring(html_source)
+    #     body = html.body
+    #
+    # except Exception as e:
+    #     print e
+
+    returnval = []
+
+    # remove everything before the first ======
+    pos = html_source.find("<br>====== ")
+    tmpstr = html_source[pos:]
+
+    # break at "<br>======" for major sections
+    arr = filter(None, tmpstr.split("<br>====== "))
+    for itm in arr:
+
+        # section name is the first item
+        pos = itm.find(" ======<br>")
+        section_name = itm[:pos].strip()
+        section_html = itm[pos + 11:]
+
+        try:
+            html = lxml.html.fromstring(section_html)
+            ol_list = html.xpath('ol')
+            print ol_list
+
+        except Exception as e:
+            log_error(e.message)
+            return None
+
+        # # remove section name from the list
+        # del lines[0]
+        # urls = []
+        #
+        # # process remaining lines
+        # for i in range(0, len(lines)):
+        #
+        #     # find the URL, just the first one
+        #     match = re.search(r"(https://[\w\./-]+)", lines[i])
+        #     if match:
+        #         pos = match.group(1).rfind("/")
+        #         if pos > -1:
+        #             test_url = match.group(1)[pos + 1:]
+        #             urls.append(match.group(1)[pos + 1:])
+        #         else:
+        #             test_url = match.group(1)
+        #             urls.append(match.group(1))
+        #
+        #         # do not add a duplicate
+        #         if test_url not in urls:
+        #             urls.append(test_url)
+        #
+        # # add the list of URLs to the dictionary
+        # returnval.append(SectionData(section_name, urls))
+
+    return returnval
+
+
 if __name__ == '__main__':
 
     log_this('Most recent run: ' + datetime.utcnow().strftime('%Y-%m-%d %H:%M') + ' UTC', True)
@@ -671,9 +743,12 @@ if __name__ == '__main__':
 
     with SelfClosingEtherpad() as ep:
 
-        text = ep.getText(padID='ta-modules')
-        ta_sections = parse_ta_modules(text['text'])
-        ta_pages = get_vol1_pages(ep, ta_sections)
+        text = ep.getHTML(padID='ta-modules')
+        # ta_sections = parse_ta_modules(text['text'])
+        ta_sections = parse_ta_modules_html(text['html'])
+
+        if error_count == 0:
+            ta_pages = get_vol1_pages(ep, ta_sections)
 
     log_this('Generating Word document.', True)
     make_docx(ta_pages)
