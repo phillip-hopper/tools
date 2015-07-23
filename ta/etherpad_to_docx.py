@@ -8,10 +8,13 @@
 #  Contributors:
 #  Phil Hopper <phillip_hopper@wycliffeassociates.org>
 #
+# sudo pip install etherpad-lite
 #
 import atexit
 import codecs
 from datetime import datetime
+import shutil
+import zipfile
 from etherpad_lite import EtherpadLiteClient, EtherpadException
 import logging
 import os
@@ -22,8 +25,6 @@ import sys
 import yaml
 
 LOGFILE = '/var/www/vhosts/door43.org/httpdocs/data/gitrepo/pages/playground/ta_export.log.txt'
-DOCXFILE = '/var/www/vhosts/api.unfoldingword.org/httpdocs/ta_export.docx'
-HTMLFILE = '/var/www/vhosts/api.unfoldingword.org/httpdocs/ta_export.html'
 FRONTMATTER = '/var/www/vhosts/door43.org/httpdocs/data/gitrepo/pages/en/legal/license.txt'
 
 H1REGEX = re.compile(r"(.*?)((?:<p>)?======\s*)(.*?)(\s*======(?:</p>)?)(.*?)", re.DOTALL | re.MULTILINE)
@@ -39,6 +40,7 @@ NLREGEX = re.compile(r"(.*?)(\\\\\s*\n)(.*?)", re.DOTALL | re.MULTILINE)
 ULREGEX = re.compile(r"(.*?)(?<!\n)(\n\s\s\*)(.+)(?!\n\s\s\*)(.*?)", re.DOTALL | re.MULTILINE)
 UL2REGEX = re.compile(r"(.*?)(\n\s\s\*)(.+\n)(?!\s\s)(.*?)", re.DOTALL | re.MULTILINE)
 PNGREGEX = re.compile(r"(.*?)(\{\{)(.*?)(\.png)(.*?)(\}\})(.*?)", re.DOTALL | re.MULTILINE)
+BODYREGEX = re.compile(r"^(.*<body>)(.*?)(</body>.*)$", re.DOTALL | re.MULTILINE)
 
 # YAML file heading data format:
 #
@@ -432,8 +434,81 @@ def get_yaml_object(value_name, yaml_data):
 
 
 def make_docx(pages):
-    divs = make_html(pages)
-    regex = re.compile(r"^(.*<body>)(.*?)(</body>.*)$", re.DOTALL | re.MULTILINE)
+
+    pages_generated = 0
+    base_dir = '/var/www/vhosts/api.unfoldingword.org/httpdocs/ta_docx'
+
+    # remove previous output
+    if os.path.exists(base_dir):
+        shutil.rmtree(base_dir)
+
+    # create directory structure
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir, 0755)
+
+    # create front matter docx
+    with codecs.open(FRONTMATTER, 'r', 'utf-8') as f:
+        fm = f.read()
+
+    if fm:
+        log_this('Generating license page')
+
+        dw = u'<a name="license"></a>' + u"\n\n"
+        dw += fm
+
+        div = u"<div class=\"page\">\n"
+        div += markdown_to_html(dw) + u"\n"
+        div += u"</div>\n"
+
+        html_to_docx(make_html_document([div]), os.path.join(base_dir, 'front_matter.docx'))
+        pages_generated += 1
+
+    # create docx for each page
+    for page in pages:
+        assert isinstance(page, PageData)
+
+        page_dir = os.path.join(base_dir, page.section_name).lower()
+        if not os.path.exists(page_dir):
+            os.makedirs(page_dir, 0755)
+
+        divs = make_html(page, pages)
+        html = make_html_document(divs)
+
+        docx_file = page.yaml_data['title'].strip()
+        docx_file = re.sub(r'[^ 0-9A-Za-z]+', '-', docx_file)  # remove non-ascii characters
+        docx_file = re.sub(r'-+', '-', docx_file)              # combine consecutive dashes
+        docx_file = re.sub(r'\s+', ' ', docx_file)             # combine consecutive spaces
+        docx_file = docx_file.replace(u' - ', u'-').replace(u' ', u'_')
+        docx_file += '.docx'
+
+        html_to_docx(html, os.path.join(page_dir, docx_file))
+        pages_generated += 1
+
+    log_this('Generated ' + str(pages_generated) + ' pages.', True)
+
+    zip_file = base_dir + '.zip'
+    if os.path.exists(zip_file):
+        os.remove(zip_file)
+
+    zip_directory(base_dir, zip_file)
+    log_this('Zipped to ' + zip_file, True)
+
+
+def zip_directory(directory_name, zip_file_name):
+
+    zip_handle = zipfile.ZipFile(zip_file_name, 'w')
+
+    for root, dirs, files in os.walk(directory_name):
+        for f in files:
+            full_path = os.path.join(root, f)
+            zip_path = full_path[len(directory_name) + 1:]
+            zip_handle.write(full_path, zip_path)
+
+    zip_handle.close()
+
+
+def make_html_document(divs):
+
     body = ''
 
     with open(os.path.dirname(os.path.realpath(__file__)) + '/ta_export.html', 'r') as f:
@@ -443,13 +518,11 @@ def make_docx(pages):
     for div in divs:
         body += div + "\n"
 
-    match = regex.search(html)
+    match = BODYREGEX.search(html)
     if match:
         html = match.group(1) + "\n" + body + match.group(3)
 
-        html_to_docx(html)
-        with codecs.open(HTMLFILE, 'w', 'utf-8') as out_file:
-            out_file.write(html)
+    return html
 
 
 def markdown_to_html(dokuwiki):
@@ -491,20 +564,24 @@ def dokuwiki_to_markdown(dokuwiki):
     return markdown
 
 
-def html_to_docx(html):
+def html_to_docx(html, file_name):
 
     # html = html.replace('<a href="#', '<a href="')
-    # command = shlex.split('/usr/bin/pandoc --filter ./insert_pagebreaks_filter --toc --toc-depth=1 -f html -t docx -o "' + DOCXFILE + '"')
-    command = shlex.split('/usr/bin/pandoc --toc --toc-depth=1 -f html -t docx -o "' + DOCXFILE + '"')
-    com = Popen(command, shell=False, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-    out, err = com.communicate(html.encode('utf-8'))
+    # command = shlex.split('/usr/bin/pandoc --filter ./insert_pagebreaks_filter
+    #           --toc --toc-depth=1 -f html -t docx -o "' + DOCXFILE + '"')
 
-    if len(err) > 0:
-        log_this(err, True)
-    else:
-        log_this('Generated document: ' +
-                 '[[https://api.unfoldingword.org/ta_export.docx|https://api.unfoldingword.org/ta_export.docx]]',
-                 True)
+    try:
+        command = shlex.split('/usr/bin/pandoc -f html -t docx -o "' + file_name + '"')
+        com = Popen(command, shell=False, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        out, err = com.communicate(html.encode('utf-8'))
+
+        if len(err) > 0:
+            log_this(err, True)
+        else:
+            log_this('Generated document: ' + file_name, True)
+
+    except Exception as ex:
+        log_error(str(ex))
 
 
 def convert_link(match):
@@ -553,35 +630,12 @@ def dokuwiki_to_html_link(dokuwiki_link):
     return dokuwiki_link
 
 
-def make_html(pages):
-    pages_generated = 0
+def make_html(page, pages):
+
     divs = []
 
-    # get the front matter
-    with codecs.open(FRONTMATTER, 'r', 'utf-8') as f:
-        fm = f.read()
-
-    if fm:
-        log_this('Generating license page')
-
-        dw = u'<a name="license"></a>' + u"\n\n"
-        dw += fm
-
-        div = u"\\newpage\n<div class=\"page\">\n"
-        div += markdown_to_html(dw) + u"\n"
-        div += u"</div>\n"
-
-        divs.append(div)
-
-        pages_generated += 1
-
-    # pages
-    for page in pages:
-        assert isinstance(page, PageData)
-
-        # check for invalid yaml data
-        if 'invalid' in page.yaml_data:
-            continue
+    # check for invalid yaml data
+    if 'invalid' not in page.yaml_data:
 
         try:
             # get the slug from the yaml data
@@ -611,18 +665,15 @@ def make_html(pages):
                 dw += output_list(pages, recommended)
                 dw += u"\n\n"
 
-            div = u"\\newpage\n<div class=\"page\">\n"
+            div = u"<div class=\"page\">\n"
             div += markdown_to_html(dw) + u"\n"
             div += u"</div>\n"
 
             divs.append(div)
 
-            pages_generated += 1
-
         except Exception as ex:
             log_error(str(ex))
 
-    log_this('Generated ' + str(pages_generated) + ' pages.', True)
     return divs
 
 
