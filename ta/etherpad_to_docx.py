@@ -8,10 +8,14 @@
 #  Contributors:
 #  Phil Hopper <phillip_hopper@wycliffeassociates.org>
 #
+# sudo pip install lxml
+# sudo pip install cssselect
+# sudo pip install etherpad-lite
 #
 import atexit
 import codecs
 from datetime import datetime
+from lxml.cssselect import CSSSelector
 from etherpad_lite import EtherpadLiteClient, EtherpadException
 import logging
 import os
@@ -27,6 +31,7 @@ DOCXFILE = '/var/www/vhosts/api.unfoldingword.org/httpdocs/ta_export.docx'
 HTMLFILE = '/var/www/vhosts/api.unfoldingword.org/httpdocs/ta_export.html'
 FRONTMATTER = '/var/www/vhosts/door43.org/httpdocs/data/gitrepo/pages/en/legal/license.txt'
 
+YAMLREGEX = re.compile(r"(---\s*\n)(.+)(^-{3}\s*\n)+?(.*)$", re.DOTALL | re.MULTILINE)
 H1REGEX = re.compile(r"(.*?)((?:<p>)?======\s*)(.*?)(\s*======(?:</p>)?)(.*?)", re.DOTALL | re.MULTILINE)
 H2REGEX = re.compile(r"(.*?)((?:<p>)?=====\s*)(.*?)(\s*=====(?:</p>)?)(.*?)", re.DOTALL | re.MULTILINE)
 H3REGEX = re.compile(r"(.*?)((?:<p>)?====\s*)(.*?)(\s*====(?:</p>)?)(.*?)", re.DOTALL | re.MULTILINE)
@@ -99,11 +104,11 @@ class SelfClosingEtherpad(EtherpadLiteClient):
 
 
 class SectionData(object):
-    def __init__(self, name, page_list=None):
-        if not page_list:
-            page_list = []
+    def __init__(self, name, page_lists=None):
+        if not page_lists:
+            page_lists = []
         self.name = self.get_name(name)
-        self.page_list = page_list
+        self.page_lists = page_lists
 
     @staticmethod
     def get_name(name):
@@ -123,6 +128,13 @@ class SectionData(object):
             return 'Test'
 
         return name
+
+
+class PageListItem(object):
+    def __init__(self, name):
+        self.name = name
+        self.href = ''
+        self.sub_menus = []
 
 
 class PageData(object):
@@ -286,47 +298,59 @@ def get_vol1_pages(e_pad, sections):
     :return: PageData[]
     """
 
-    regex = re.compile(r"(---\s*\n)(.+)(^-{3}\s*\n)+?(.*)$", re.DOTALL | re.MULTILINE)
-
     pages = []
 
     for section in sections:
         section_key = section.name
 
-        for pad_id in section.page_list:
+        for page_list in section.page_lists:
 
+            for item in page_list:
+                pages.extend(get_page_and_subs(e_pad, section_key, item))
+
+    return pages
+
+
+def get_page_and_subs(e_pad, section_key, item):
+    try:
+        assert isinstance(item, PageListItem)
+    except Exception as ex:
+        log_error(str(ex))
+
+    pad_id = item.href
+    pages = []
+
+    # get the page
+    try:
+        if pad_id:
             log_this('Processing page: ' + pad_id, True)
 
-            # get the page
-            try:
-                page_raw = e_pad.getText(padID=pad_id)
-                match = regex.match(page_raw['text'])
-                if match:
+            page_raw = e_pad.getText(padID=pad_id)
+            match = YAMLREGEX.match(page_raw['text'])
+            if match:
 
-                    # check for valid yaml data
-                    yaml_data = get_page_yaml_data(pad_id, match.group(2))
-                    if yaml_data is None:
-                        continue
+                # check for valid yaml data
+                yaml_data = get_page_yaml_data(pad_id, match.group(2))
+                if yaml_data is not None:
 
                     if yaml_data == {}:
                         log_error('No yaml data found for ' + pad_id)
-                        continue
 
-                    if not check_value_is_valid_int('volume', yaml_data):
-                        continue
+                    else:
+                        if check_value_is_valid_int('volume', yaml_data) and int(yaml_data['volume']) == 1:
+                            pages.append(PageData(section_key, pad_id, yaml_data, match.group(4)))
+            else:
+                log_error('Yaml header not found ' + pad_id)
 
-                    if int(yaml_data['volume']) != 1:
-                        continue
+        for sub_menu in item.sub_menus:
+            for sub_item in sub_menu:
+                pages.extend(get_page_and_subs(e_pad, section_key, sub_item))
 
-                    pages.append(PageData(section_key, pad_id, yaml_data, match.group(4)))
-                else:
-                    log_error('Yaml header not found ' + pad_id)
+    except EtherpadException as e:
+        log_error(e.message)
 
-            except EtherpadException as e:
-                log_error(e.message)
-
-            except Exception as ex:
-                log_error(str(ex))
+    except Exception as ex:
+        log_error(str(ex))
 
     return pages
 
@@ -674,15 +698,14 @@ def get_page_link_by_slug(pages, slug):
 
 
 def parse_ta_modules_html(html_source):
+    """
+    Returns a dictionary containing the URLs in each major section
+    :param html_source: str
+    :rtype: SectionData[]
+    """
 
-    # try:
-    #     html = lxml.html.fromstring(html_source)
-    #     body = html.body
-    #
-    # except Exception as e:
-    #     print e
-
-    returnval = []
+    sections = []
+    css_selector = CSSSelector('a, ol')
 
     # remove everything before the first ======
     pos = html_source.find("<br>====== ")
@@ -696,42 +719,61 @@ def parse_ta_modules_html(html_source):
         pos = itm.find(" ======<br>")
         section_name = itm[:pos].strip()
         section_html = itm[pos + 11:]
+        page_lists = []
 
         try:
+            # get the html for this section
             html = lxml.html.fromstring(section_html)
-            ol_list = html.xpath('ol')
-            print ol_list
+
+            # get the numbered lists from this section
+            selected_items = css_selector(html)
+            ol_lists = html.xpath('ol')
+            for ol_list in ol_lists:
+                page_lists.append(get_page_list_from_ol(ol_list))
+
+            sections.append(SectionData(section_name, page_lists))
 
         except Exception as e:
             log_error(e.message)
             return None
 
-        # # remove section name from the list
-        # del lines[0]
-        # urls = []
-        #
-        # # process remaining lines
-        # for i in range(0, len(lines)):
-        #
-        #     # find the URL, just the first one
-        #     match = re.search(r"(https://[\w\./-]+)", lines[i])
-        #     if match:
-        #         pos = match.group(1).rfind("/")
-        #         if pos > -1:
-        #             test_url = match.group(1)[pos + 1:]
-        #             urls.append(match.group(1)[pos + 1:])
-        #         else:
-        #             test_url = match.group(1)
-        #             urls.append(match.group(1))
-        #
-        #         # do not add a duplicate
-        #         if test_url not in urls:
-        #             urls.append(test_url)
-        #
-        # # add the list of URLs to the dictionary
-        # returnval.append(SectionData(section_name, urls))
+    return sections
 
-    return returnval
+
+def get_page_list_from_ol(ol, prefix=''):
+
+    page_list = []
+    menu_index = 0
+
+    # get the li elements in this list
+    li_elements = ol.xpath('li')
+    for li in li_elements:
+
+        menu_index += 1
+        page_list_item = PageListItem("{0}{1}".format(prefix, menu_index))
+        sub_menus = []
+
+        # get the link to the pad page
+        anchor = li.xpath('a')
+        if len(anchor) > 0:
+            href = anchor[0].attrib['href']
+
+            # get the slug from the href
+            pos = href.rfind("/")
+            if pos > -1:
+                href = href[pos + 1:]
+
+            page_list_item.href = href
+
+        subs = li.xpath('ol')
+        for sub in subs:
+            sub_menus.append(get_page_list_from_ol(sub, "{0}.".format(menu_index)))
+
+        page_list_item.sub_menus = sub_menus
+
+        page_list.append(page_list_item)
+
+    return page_list
 
 
 if __name__ == '__main__':
