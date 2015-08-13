@@ -12,8 +12,10 @@
 import codecs
 import json
 import os
+import shlex
 import urllib
 import re
+from subprocess import Popen, PIPE
 
 OBSURL = 'https://api.unfoldingword.org/obs/txt/1/en/obs-en.json'
 NOTESURL = 'https://api.unfoldingword.org/obs/txt/1/en/tN-en.json'
@@ -21,6 +23,7 @@ TERMSURL = 'https://api.unfoldingword.org/obs/txt/1/en/kt-en.json'
 CHECKURL = 'https://api.unfoldingword.org/obs/txt/1/en/CQ-en.json'
 
 HTMLFILE = '/var/www/vhosts/api.unfoldingword.org/httpdocs/ta_notes.html'
+DOCXFILE = '/var/www/vhosts/api.unfoldingword.org/httpdocs/ta_notes.docx'
 
 
 class Stories(list):
@@ -274,7 +277,18 @@ def make_html(all_stories, all_terms):
     with codecs.open(HTMLFILE, 'w', 'utf-8') as out_file:
         out_file.write(html)
 
-    print html
+    return html
+
+
+def html_to_docx(html):
+
+    # html = html.replace('<a href="#', '<a href="')
+    command = shlex.split('/usr/bin/pandoc --toc --toc-depth=1 -f html -t docx -o "' + DOCXFILE + '"')
+    com = Popen(command, shell=False, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    out, err = com.communicate(html.encode('utf-8'))
+
+    if len(err) > 0:
+        print err
 
 
 if __name__ == '__main__':
@@ -284,4 +298,4 @@ if __name__ == '__main__':
     terms = Terms(stories)
     questions = Questions(stories)
 
-    make_html(stories, terms)
+    html_to_docx(make_html(stories, terms))
