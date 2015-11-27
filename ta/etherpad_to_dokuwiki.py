@@ -29,11 +29,12 @@ YAMLREGEX = re.compile(r"(---\s*\n)(.+?)(^-{3}\s*\n)+?(.*)$", re.DOTALL | re.MUL
 # ---
 # title: Test tA Module 1
 # question: What is Module 1 all about?
-# manual: Section_Name(?)
+# manual: Section_Name
 # volume: 1
 # slug: testmod1 - unique in all tA
-# dependencies: ["intro", "howdy"] - slugs
+# dependencies: ["intro", "howdy"] - a single slug or an array of slugs
 # status: finished
+# credits: Used with permission from someone
 # ---
 #
 # Derived URL = en/ta/vol1/section_name/testmod1
