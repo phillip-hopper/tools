@@ -40,7 +40,6 @@ VOLUMEREGEX = re.compile(r".*(volume:\s*[1]+).*", re.DOTALL | re.MULTILINE | re.
 # Derived URL = en/ta/vol1/section_name/testmod1
 
 
-
 # enable logging for this script
 log_dir = os.path.dirname(LOGFILE)
 if not os.path.exists(log_dir):
@@ -272,7 +271,7 @@ def create_new_page(e_pad, original_page_name, force=False):
 
         original_html = e_pad.getHTML(padID=original_page_name)
 
-        # update intermal links to other tA pages in this namespace
+        # update internal links to other tA pages in this namespace
         new_text = original_html['html'].replace(u'&#x2F;p&#x2F;ta-',
                                                  u'&#x2F;p&#x2F;' + NEW_LANGUAGE_CODE + u'-ta-')
 

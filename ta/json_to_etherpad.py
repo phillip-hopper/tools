@@ -10,7 +10,12 @@
 #
 
 import argparse
+import cgi
 import codecs
+import shlex
+from subprocess import Popen, PIPE
+
+# noinspection PyUnresolvedReferences
 from datetime import datetime
 from etherpad_lite import EtherpadLiteClient, EtherpadException
 import json
@@ -38,7 +43,7 @@ CONTINUE_ON_ERROR = 0
 DELETE_EXISTING = -1
 ERROR_COUNT = 0
 
-YAMLREGEX = re.compile(r"(---\s*\n)(.+?)(^-{3}\s*\n)+?(.*)$", re.DOTALL | re.MULTILINE)
+YAML_REGEX = re.compile(r"(---\s*\n)(.+?)(^-{3}\s*\n)+?(.*)$", re.DOTALL | re.MULTILINE)
 
 
 class SelfClosingEtherpad(EtherpadLiteClient):
@@ -218,7 +223,7 @@ def get_ta_pages(e_pad, sections):
             # get the page
             try:
                 page_raw = e_pad.getText(padID=pad_id)
-                match = YAMLREGEX.match(page_raw['text'])
+                match = YAML_REGEX.match(page_raw['text'])
                 if match:
 
                     # check for valid yaml data
@@ -298,31 +303,31 @@ def get_page_yaml_data(raw_yaml_text, skip_checks=False):
 
 def check_yaml_values(yaml_data):
 
-    returnval = True
+    return_val = True
 
     # check the required yaml values
     if not check_value_is_valid_int('volume', yaml_data):
         log_error('Volume value is not valid.')
-        returnval = False
+        return_val = False
 
     if not check_value_is_valid_string('manual', yaml_data):
         log_error('Manual value is not valid.')
-        returnval = False
+        return_val = False
 
     if not check_value_is_valid_string('slug', yaml_data):
         log_error('Volume value is not valid.')
-        returnval = False
+        return_val = False
     else:
         # slug cannot contain a dash, only underscores
         test_slug = str(yaml_data['slug']).strip()
         if '-' in test_slug:
             log_error('Slug values cannot contain hyphen (dash).')
-            returnval = False
+            return_val = False
 
     if not check_value_is_valid_string('title', yaml_data):
-        returnval = False
+        return_val = False
 
-    return returnval
+    return return_val
 
 
 def check_value_is_valid_string(value_to_check, yaml_data):
@@ -373,104 +378,6 @@ def check_value_is_valid_int(value_to_check, yaml_data):
     return isinstance(data_value, int)
 
 
-def create_new_page(e_pad, original_page_name):
-    global NEW_LANGUAGE_CODE
-
-    new_pad_name = NEW_LANGUAGE_CODE + '-' + original_page_name
-    pad_exists = False
-
-    # check if the new pad already exists
-    try:
-        e_pad.getText(padID=new_pad_name)
-
-        # if you are here is exists
-        pad_exists = True
-
-    except EtherpadException:
-        log_this('', True)
-
-    except Exception as ex:
-        log_error(str(ex))
-
-    # delete existing pad
-    try:
-        if pad_exists and should_delete_existing():
-            e_pad.deletePad(padID=new_pad_name)
-
-    except EtherpadException as e:
-        log_error(e.message)
-
-    except Exception as ex:
-        log_error(str(ex))
-
-
-    try:
-        # create the new pad
-        original_text = e_pad.getText(padID=original_page_name)
-
-        test_text = original_text['text']
-
-        original_html = e_pad.getHTML(padID=original_page_name)
-
-        # update intermal links to other tA pages in this namespace
-        new_text = original_html['html'].replace(u'&#x2F;p&#x2F;ta-',
-                                                 u'&#x2F;p&#x2F;' + NEW_LANGUAGE_CODE + u'-ta-')
-
-        new_text = new_text.replace(u'[[en:ta:', u'[[' + NEW_LANGUAGE_CODE + u':ta:')
-        new_text = new_text.replace(u'[[:en:ta:', u'[[:' + NEW_LANGUAGE_CODE + u':ta:')
-        new_text = new_text.replace(u'[[en:ta|', u'[[' + NEW_LANGUAGE_CODE + u':ta|')
-        new_text = new_text.replace(u'[[:en:ta|', u'[[:' + NEW_LANGUAGE_CODE + u':ta|')
-        new_text = new_text.replace(u'<br><strong>namespace:</strong> en<br>', u'<br><strong>namespace:</strong> ' + NEW_LANGUAGE_CODE + u'<br>')
-
-        # undo the change to hi-ta-modules-template
-        new_text = new_text.replace(NEW_LANGUAGE_CODE + u'-ta-modules-template', u'ta-modules-template')
-
-        e_pad.createPad(padID=new_pad_name)
-        e_pad.setHTML(padID=new_pad_name, html=new_text)
-
-    except EtherpadException as e:
-        log_error(e.message)
-
-    except Exception as ex:
-        log_error(str(ex))
-
-    return
-
-
-def should_delete_existing():
-    global DELETE_EXISTING
-
-    # if instructed to not delete pages
-    if DELETE_EXISTING == 0:
-        return False
-
-    if DELETE_EXISTING == 1:
-        return True
-
-    # prompt user to delete or not
-    user_input = raw_input('Delete existing page (y|N): ')
-
-    if user_input == 'y':
-
-        # prompt to delete all existing and not ask again
-        user_input = raw_input('Delete all existing pages without asking (y|N): ')
-
-        if user_input == 'y':
-            DELETE_EXISTING = 1
-
-        return True
-
-    else:
-
-        # prompt user to not delete existing and not ask again
-        user_input = raw_input('Do not delete any existing pages (y|N): ')
-
-        if user_input == 'y':
-            DELETE_EXISTING = 0
-
-        return False
-
-
 def get_existing_page_by_slug(ep_pages, slug):
     """
     :param ep_pages: PageData[]
@@ -491,37 +398,128 @@ def get_existing_page_by_slug(ep_pages, slug):
     return None
 
 
-def update_ep_page(ep_page, json_page):
+def update_ep_page(e_pad, ep_page, json_page):
     """
 
+    :param e_pad: SelfClosingEtherpad
     :param ep_page: PageData
     :param json_page:
     :return:
     """
+    global NEW_LANGUAGE_CODE
+
     log_this('Updating ' + ep_page.page_id)
 
-    if 'question' in json_page:
+    if 'question' in json_page and json_page['question']:
         ep_page.yaml_data['question'] = json_page['question']
 
-    if 'title' in json_page:
-        ep_page.yaml_data['question'] = json_page['question']
+    if 'title' in json_page and json_page['title']:
+        ep_page.yaml_data['title'] = json_page['title']
 
-    html = ''
+    html = u''
     for body_item in json_page['body']:
+        html += process_item(body_item)
 
-        html += '<' + body_item['tag'] + '>'
+    # update internal links to other tA pages in this namespace
+    html = html.replace(u'&#x2F;p&#x2F;ta-', u'&#x2F;p&#x2F;' + NEW_LANGUAGE_CODE + u'-ta-')
+    html = html.replace(u'[[en:ta:', u'[[' + NEW_LANGUAGE_CODE + u':ta:')
+    html = html.replace(u'[[:en:ta:', u'[[:' + NEW_LANGUAGE_CODE + u':ta:')
+    html = html.replace(u'>en:ta:', u'>' + NEW_LANGUAGE_CODE + u':ta:')
+    html = html.replace(u'[[en:ta|', u'[[' + NEW_LANGUAGE_CODE + u':ta|')
+    html = html.replace(u'[[:en:ta|', u'[[:' + NEW_LANGUAGE_CODE + u':ta|')
+    html = html.replace(u'<br><strong>namespace:</strong> en<br>', u'<br><strong>namespace:</strong> ' +
+                        NEW_LANGUAGE_CODE + u'<br>')
 
-        if 'items' in body_item:
-            # process items
+    # convert html to dokuwiki format
+    dokuwiki = html_to_dokuwiki(html)
 
-        else:
-            html += body_item['text']
+    # start with the YAML header
+    html = u'<!DOCTYPE HTML><html><body>---&nbsp;<br>'
 
-        html += '</' + body_item['tag'] + '>/n'
+    # add the YAML header
+    for key, value in ep_page.yaml_data.iteritems():
+        html += u'<strong>' + key + u':</strong> '
+
+        if type(value) in [str, unicode]:
+            html += value
+        elif type(value) in [int, long, float]:
+            html += str(value)
+        elif type(value) is list:
+            html += u'['
+            comma = u''
+            for item in value:
+                html += comma + u'"' + item + u'"'
+                comma = u','
+            html += u']'
+
+        html += u'<br>'
+
+    html += u'---&nbsp;<br><br>'
+
+    # escape special characters the dokuwiki text
+    dokuwiki = cgi.escape(dokuwiki)
+
+    # append the dokuwiki text
+    html += dokuwiki + u'<br></body></html>'
+
+    # html encode the text
+    html = html.replace(u'\n', u'<br>')
+    html = html.encode('ascii', 'xmlcharrefreplace')
+
+    # make sure we have a good pad id
+    pad_id = check_pad_id(e_pad, ep_page.page_id)
+
+    # update the text now
+    e_pad.setHTML(padID=pad_id, html=html)
 
 
+def check_pad_id(e_pad, current_id):
+    global NEW_LANGUAGE_CODE
+
+    # make sure the page_id begins with the language code
+    pad_id = current_id
+    if not pad_id.startswith(NEW_LANGUAGE_CODE + u'-'):
+        pad_id = NEW_LANGUAGE_CODE + u'-' + pad_id
+        pad_exists = False
+
+        # check if the new pad already exists
+        # noinspection PyBroadException
+        try:
+            e_pad.getText(padID=pad_id)
+
+            # if you are here is exists
+            pad_exists = True
+
+        except:
+            pass
+
+        if not pad_exists:
+            e_pad.createPad(padID=pad_id)
+
+    return pad_id
 
 
+def process_item(item):
+
+    html = u'<' + item['tag'] + u'>'
+
+    if 'items' in item:
+        html += u'\n'
+        for sub_item in item['items']:
+            html += process_item(sub_item)
+
+    else:
+        html += item['text']
+
+    html += u'</' + item['tag'] + u'>\n'
+    return html
+
+
+def html_to_dokuwiki(html):
+    command = shlex.split(u'pandoc -f html -t dokuwiki')
+    com = Popen(command, shell=False, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    out, ret = com.communicate(html.encode('utf8'))
+    return out.decode('utf-8').strip()
 
 
 if __name__ == '__main__':
@@ -582,14 +580,14 @@ if __name__ == '__main__':
         ta_sections = parse_ta_modules(text['text'])
         ta_pages = get_ta_pages(ep, ta_sections)
 
-    # update the pages with the new translations
-    for manual in imported_pages['manuals']:
-        for page in manual['pages']:
+        # update the pages with the new translations
+        for manual in imported_pages['manuals']:
+            for page in manual['pages']:
 
-            # find the corresponding etherpad page
-            pad_page = get_existing_page_by_slug(ta_pages, page['slug'])
-            if pad_page:
-                update_ep_page(pad_page, page)
+                # find the corresponding etherpad page
+                pad_page = get_existing_page_by_slug(ta_pages, page['slug'])
+                if pad_page:
+                    update_ep_page(ep, pad_page, page)
 
     # remember last_checked for the next time
     if ERROR_COUNT > 0:
