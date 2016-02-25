@@ -291,10 +291,8 @@ def create_new_page(e_pad, original_page_name, force=False):
 def replace_language_code(page_text):
     global NEW_LANGUAGE_CODE
 
-    new_text = page_text.replace(u'[[en:ta:', u'[[' + NEW_LANGUAGE_CODE + u':ta:')
-    new_text = new_text.replace(u'[[:en:ta:', u'[[:' + NEW_LANGUAGE_CODE + u':ta:')
-    new_text = new_text.replace(u'[[en:ta|', u'[[' + NEW_LANGUAGE_CODE + u':ta|')
-    new_text = new_text.replace(u'[[:en:ta|', u'[[:' + NEW_LANGUAGE_CODE + u':ta|')
+    new_text = page_text.replace(u'en:ta:', NEW_LANGUAGE_CODE + u':ta:')
+    new_text = new_text.replace(u'en:ta|', NEW_LANGUAGE_CODE + u':ta|')
     new_text = new_text.replace(u'{{page>en:ta:', u'{{page>' + NEW_LANGUAGE_CODE + u':ta:')
 
     return new_text

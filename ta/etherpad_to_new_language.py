@@ -259,7 +259,6 @@ def create_new_page(e_pad, original_page_name, force=False):
     except Exception as ex:
         log_error(str(ex))
 
-
     try:
         # create the new pad
         original_text = e_pad.getText(padID=original_page_name)
@@ -272,15 +271,14 @@ def create_new_page(e_pad, original_page_name, force=False):
 
         original_html = e_pad.getHTML(padID=original_page_name)
 
-        # update intermal links to other tA pages in this namespace
+        # update internal links to other tA pages in this namespace
         new_text = original_html['html'].replace(u'&#x2F;p&#x2F;ta-',
                                                  u'&#x2F;p&#x2F;' + NEW_LANGUAGE_CODE + u'-ta-')
 
-        new_text = new_text.replace(u'[[en:ta:', u'[[' + NEW_LANGUAGE_CODE + u':ta:')
-        new_text = new_text.replace(u'[[:en:ta:', u'[[:' + NEW_LANGUAGE_CODE + u':ta:')
-        new_text = new_text.replace(u'[[en:ta|', u'[[' + NEW_LANGUAGE_CODE + u':ta|')
-        new_text = new_text.replace(u'[[:en:ta|', u'[[:' + NEW_LANGUAGE_CODE + u':ta|')
-        new_text = new_text.replace(u'<br><strong>namespace:</strong> en<br>', u'<br><strong>namespace:</strong> ' + NEW_LANGUAGE_CODE + u'<br>')
+        new_text = new_text.replace(u'en:ta:', NEW_LANGUAGE_CODE + u':ta:')
+        new_text = new_text.replace(u'en:ta|', NEW_LANGUAGE_CODE + u':ta|')
+        new_text = new_text.replace(u'<br><strong>namespace:</strong> en<br>',
+                                    u'<br><strong>namespace:</strong> ' + NEW_LANGUAGE_CODE + u'<br>')
 
         # undo the change to hi-ta-modules-template
         new_text = new_text.replace(NEW_LANGUAGE_CODE + u'-ta-modules-template', u'ta-modules-template')
