@@ -10,13 +10,12 @@
 #
 #  Requires PyGithub for unfoldingWord export.
 
-'''
+"""
 Exports the key terms and translationNotes to JSON files.
-'''
+"""
 
 import os
 import re
-import sys
 import json
 import glob
 import codecs
@@ -52,6 +51,7 @@ suggestre = re.compile(ur'===== Translation Suggestions:? =====(.*?)[=(][TS]?',
 qre = re.compile(ur'Q\?(.*)', re.UNICODE)
 are = re.compile(ur'A\.(.*)', re.UNICODE)
 refre = re.compile(ur'\[(.*?)]', re.UNICODE)
+def_re = re.compile(ur'===== (Definition|Facts|Description):? =====(.*?)\n[=(]', re.UNICODE | re.DOTALL)
 
 
 # Regexes for DW to HTML conversion
@@ -63,34 +63,30 @@ h3re = re.compile(ur'\n=== (.*?) ===\n', re.UNICODE)
 def getKT(f):
     page = codecs.open(f, 'r', encoding='utf-8').read()
     if not pubre.search(page): return False
-    kt = {}
+
     # The filename is the ID
-    kt['id'] = f.rsplit('/', 1)[1].replace('.txt', '')
+    kt = {'id': f.rsplit('/', 1)[1].replace('.txt', '')}
+
     ktse = ktre.search(page)
     if not ktse:
         print 'Term not found for {}'.format(kt['id'])
-        return False
+        return None
     kt['term'] = ktse.group(1).strip()
     kt['sub'] = getKTSub(page)
-    kt['def_title'], kt['def'] = getKTDef(page)
-    if not kt['def_title']:
+
+    def_se = def_re.search(page)
+    if not def_se:
         print 'Definition or Facts not found for {}'.format(kt['id'])
-        return False
+        return None
+
+    kt['def_title'] = def_se.group(1).strip()
+    kt['def'] = getHTML(def_se.group(2).rstrip())
+
     kt['cf'] = getKTCF(page)
     kt['def'] += getKTSuggestions(page)
+
     return kt
 
-def getKTDef(page):
-    for def_title in def_titles:
-        defre = re.compile(ur'===== {0}:? =====(.*?)\n[=(]'.format(
-                                           def_title), re.UNICODE | re.DOTALL)
-        defse = defre.search(page)
-        if defse: break
-    try:
-        deftxt = defse.group(1).rstrip()
-    except:
-        return (False, False)
-    return (def_title, getHTML(deftxt))
 
 def getKTSuggestions(page):
     sugformat = u'<h2>Translation Suggestions</h2>{0}'
@@ -142,16 +138,16 @@ def getHTMLList(text):
     return u''.join(newtext)
 
 def makeDir(d):
-    '''
+    """
     Simple wrapper to make a directory if it does not exist.
-    '''
+    """
     if not os.path.exists(d):
         os.makedirs(d, 0755)
 
 def writeJSON(outfile, p):
-    '''
+    """
     Simple wrapper to write a file as JSON.
-    '''
+    """
     makeDir(outfile.rsplit('/', 1)[0])
     f = codecs.open(outfile, 'w', encoding='utf-8')
     f.write(getDump(p))
